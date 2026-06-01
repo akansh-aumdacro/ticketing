@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { statusMap } from "@/lib/mock-data";
 import {
@@ -52,48 +52,25 @@ export default function TicketDetail() {
 
   const { data: ticket, isLoading } = useQuery({
     queryKey: ["ticket", id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(name), dept:departments!tickets_department_id_fkey(name), unit:units(name), raiser:profiles!tickets_raised_by_fkey(name, employee_id, contact, department_id), assigned_profile:profiles!tickets_assigned_to_fkey(name, employee_id, contact), closed_by_profile:profiles!tickets_closed_by_fkey(name)")
-        .eq("id", id!)
-        .single();
-      return data;
-    },
+    queryFn: async () => api.tickets.get(id!),
     enabled: !!id,
   });
 
   const { data: history } = useQuery({
     queryKey: ["ticket-history", id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("ticket_history")
-        .select("*, performer:profiles!ticket_history_performed_by_fkey(name)")
-        .eq("ticket_id", id!)
-        .order("created_at", { ascending: true });
-      return data || [];
-    },
+    queryFn: async () => api.tickets.history(id!),
     enabled: !!id,
   });
 
   const { data: deptMembers } = useQuery({
     queryKey: ["dept-members", ticket?.issue_department_id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("profiles")
-        .select("user_id, name")
-        .eq("department_id", ticket!.issue_department_id!);
-      return data || [];
-    },
+    queryFn: async () => api.profiles.list({ department_id: ticket!.issue_department_id! }),
     enabled: !!ticket?.issue_department_id && (role === "hod" || role === "super_admin" || role === "admin"),
   });
 
   const { data: ticketRating } = useQuery({
     queryKey: ["ticket-rating", id],
-    queryFn: async () => {
-      const { data } = await supabase.from("ticket_ratings").select("*").eq("ticket_id", id!).maybeSingle();
-      return data;
-    },
+    queryFn: async () => api.tickets.rating(id!),
     enabled: !!id,
   });
 
@@ -105,19 +82,16 @@ export default function TicketDetail() {
 
   const updateTicket = useMutation({
     mutationFn: async (updates: Record<string, any>) => {
-      const { error } = await supabase.from("tickets").update(updates as any).eq("id", id!);
-      if (error) throw error;
+      await api.tickets.update(id!, updates);
     },
     onSuccess: invalidate,
   });
 
   const addHistory = async (action: string, oldStatus?: string, newStatus?: string, histRemarks?: string) => {
-    await supabase.from("ticket_history").insert({
-      ticket_id: id!,
+    await api.tickets.addHistory(id!, {
       action,
-      performed_by: user!.id,
-      old_status: oldStatus as any,
-      new_status: newStatus as any,
+      old_status: oldStatus,
+      new_status: newStatus,
       remarks: histRemarks,
     });
   };
@@ -135,9 +109,9 @@ export default function TicketDetail() {
     await updateTicket.mutateAsync(updates);
     const memberName = deptMembers?.find(m => m.user_id === assignTo)?.name;
     await addHistory(`Assigned to ${memberName}`, ticket!.status, "in_progress");
-    await supabase.from("user_roles").upsert({ user_id: assignTo, role: "assigned_person" as any }, { onConflict: "user_id,role" });
+    await api.users.updateRole(assignTo, "assigned_person");
     // Notification
-    await supabase.from("notifications").insert({
+    await api.notifications.create({
       user_id: assignTo,
       ticket_id: id!,
       title: "Ticket Assigned",
@@ -162,7 +136,7 @@ export default function TicketDetail() {
     await updateTicket.mutateAsync({ status: "resolved", remarks });
     await addHistory("Marked as Resolved", ticket!.status, "resolved", remarks);
     // Notify raiser
-    await supabase.from("notifications").insert({
+    await api.notifications.create({
       user_id: ticket!.raised_by,
       ticket_id: id!,
       title: "Ticket Resolved",
@@ -181,7 +155,7 @@ export default function TicketDetail() {
       closing_remarks: remarks,
     });
     await addHistory("Ticket Closed", ticket!.status, "closed", remarks);
-    await supabase.from("notifications").insert({
+    await api.notifications.create({
       user_id: ticket!.raised_by,
       ticket_id: id!,
       title: "Ticket Closed",
@@ -200,14 +174,8 @@ export default function TicketDetail() {
 
     let reopenPhotoUrl: string | null = null;
     if (reopenFiles.length > 0) {
-      const file = reopenFiles[0];
-      const ext = file.name.split(".").pop();
-      const path = `${user!.id}/reopen-${Date.now()}.${ext}`;
-      const { data: uploadData } = await supabase.storage.from("ticket-attachments").upload(path, file);
-      if (uploadData) {
-        const { data: urlData } = supabase.storage.from("ticket-attachments").getPublicUrl(uploadData.path);
-        reopenPhotoUrl = urlData.publicUrl;
-      }
+      const { url } = await api.uploadFile(reopenFiles[0]);
+      reopenPhotoUrl = url;
     }
 
     await updateTicket.mutateAsync({
@@ -219,7 +187,7 @@ export default function TicketDetail() {
     await addHistory("Ticket Reopened", ticket!.status, "reopened", reopenRemarks);
     // Notify assigned person
     if (ticket!.assigned_to) {
-      await supabase.from("notifications").insert({
+      await api.notifications.create({
         user_id: ticket!.assigned_to,
         ticket_id: id!,
         title: "Ticket Reopened",
@@ -234,17 +202,12 @@ export default function TicketDetail() {
   };
 
   const handleRating = async () => {
-    const { error } = await supabase.from("ticket_ratings").insert({
-      ticket_id: id!,
-      rated_by: user!.id,
-      rating,
-      feedback: feedback || null,
-    });
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      await api.tickets.addRating(id!, { rating, feedback: feedback || null });
       toast({ title: "Thank you for your feedback!" });
       invalidate();
+    } catch (error) {
+      toast({ title: "Error", description: (error as Error).message, variant: "destructive" });
     }
   };
 

@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { Inbox, TrendingUp, TrendingDown } from "lucide-react";
@@ -41,33 +41,23 @@ export default function Analytics() {
 
   const { data: units } = useQuery({
     queryKey: ["filter-units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("id, name").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
   });
 
   const { data: tickets, isLoading } = useQuery({
     queryKey: ["analytics-tickets", role, profile?.department_id],
     queryFn: async () => {
-      let query = supabase
-        .from("tickets")
-        .select("id, status, created_at, closed_at, target_date, assigned_to, unit_id, issue_department_id, issue_dept:departments!tickets_issue_department_id_fkey(name), unit:units(name), assignee:profiles!tickets_assigned_to_fkey(name)")
-        .order("created_at", { ascending: false });
-      if (role === "user") query = query.eq("raised_by", user!.id);
-      else if (role === "hod" && profile?.department_id) query = query.eq("issue_department_id", profile.department_id);
-      const { data } = await query;
-      return data || [];
+      const params: Record<string, string | boolean> = {};
+      if (role === "user") params.mine = true;
+      else if (role === "hod" && profile?.department_id) params.department = profile.department_id;
+      return api.tickets.list(params);
     },
     enabled: !!user,
   });
 
   const { data: ratings } = useQuery({
     queryKey: ["analytics-ratings"],
-    queryFn: async () => {
-      const { data } = await supabase.from("ticket_ratings").select("rating, ticket_id");
-      return data || [];
-    },
+    queryFn: async () => api.ratings.list(),
     enabled: !!user,
   });
 

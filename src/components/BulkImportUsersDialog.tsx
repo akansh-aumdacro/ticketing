@@ -11,7 +11,7 @@ import {
 import {
   Download, Upload, FileCheck2, Loader2, CheckCircle2, XCircle, AlertCircle, FileText,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 interface Props {
@@ -174,7 +174,7 @@ export function BulkImportUsersDialog({ open, onOpenChange, departments, units, 
       const dataRows = matrix.slice(1).filter((r) => r.some((c) => c && c.trim() !== ""));
 
       // Pre-fetch existing employee IDs
-      const { data: existingProfiles } = await supabase.from("profiles").select("employee_id");
+      const existingProfiles = await api.profiles.list();
       const existingEmpIds = new Set(
         (existingProfiles || []).map((p: any) => (p.employee_id || "").toString().trim().toLowerCase()).filter(Boolean)
       );
@@ -252,30 +252,22 @@ export function BulkImportUsersDialog({ open, onOpenChange, departments, units, 
   const handleImport = async () => {
     setImporting(true);
     setProgress(0);
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
     const total = rows.length;
     for (let i = 0; i < total; i++) {
       setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: "importing" } : r)));
       const r = rows[i];
       try {
-        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-create-user`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            email: r.email,
-            password: r.password,
-            name: r.name,
-            username: r.username,
-            employeeId: r.employeeId,
-            contact: r.contact,
-            role: r.roleKey,
-            departmentId: r.departmentId || "none",
-            unitId: r.unitId,
-          }),
+        await api.users.create({
+          email: r.email,
+          password: r.password,
+          name: r.name,
+          username: r.username,
+          employeeId: r.employeeId,
+          contact: r.contact,
+          role: r.roleKey,
+          departmentId: r.departmentId || "none",
+          unitId: r.unitId,
         });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.error || "Failed to create user");
         setRows((prev) => prev.map((row, idx) => (idx === i ? { ...row, status: "created" } : row)));
       } catch (err: any) {
         setRows((prev) => prev.map((row, idx) => (idx === i ? { ...row, status: "failed", errorMsg: err?.message || "Unknown error" } : row)));

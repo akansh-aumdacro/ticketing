@@ -1,13 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
 /**
- * Super-admin only ticket delete. Performs cascade cleanup of dependent rows
- * (history, messages, work logs, ratings, attachments, notifications) since
- * the schema has no FK ON DELETE CASCADE. Optimistically removes the ticket
- * from any cached `tickets` lists.
+ * Super-admin only ticket delete. The server cascades cleanup of dependent rows
+ * (history, messages, ratings, attachments, notifications). Optimistically
+ * removes the ticket from any cached `tickets` lists.
  */
 export function useDeleteTicket() {
   const { role } = useAuth();
@@ -18,19 +17,7 @@ export function useDeleteTicket() {
   const mutation = useMutation({
     mutationFn: async (ticketId: string) => {
       if (!isSuperAdmin) throw new Error("Only Super Admins can delete tickets.");
-
-      // Best-effort cleanup of dependent rows (RLS may block some — ignore errors)
-      await Promise.allSettled([
-        supabase.from("ticket_history").delete().eq("ticket_id", ticketId),
-        supabase.from("ticket_messages").delete().eq("ticket_id", ticketId),
-        supabase.from("ticket_work_logs").delete().eq("ticket_id", ticketId),
-        supabase.from("ticket_ratings").delete().eq("ticket_id", ticketId),
-        supabase.from("ticket_attachments").delete().eq("ticket_id", ticketId),
-        supabase.from("notifications").delete().eq("ticket_id", ticketId),
-      ]);
-
-      const { error } = await supabase.from("tickets").delete().eq("id", ticketId);
-      if (error) throw error;
+      await api.tickets.remove(ticketId);
       return ticketId;
     },
     onMutate: async (ticketId: string) => {

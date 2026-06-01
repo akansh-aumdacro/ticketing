@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Pencil, Trash2, PlusCircle, Save, X, Shield } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Permissions } from "@/contexts/PermissionsContext";
 
@@ -90,41 +90,21 @@ export function RolesPermissionsTab() {
 
   const { data: roles, isLoading } = useQuery<RoleRow[]>({
     queryKey: ["roles-permissions"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("roles" as any).select("*").order("created_at", { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as unknown as RoleRow[];
-    },
+    queryFn: async () => (await api.roles.list()) as RoleRow[],
     refetchOnWindowFocus: false,
   });
 
   const upsertMutation = useMutation({
     mutationFn: async (payload: FormState & { id?: string }) => {
+      const body = {
+        name: payload.name,
+        description: payload.description || null,
+        permissions: payload.permissions,
+      };
       if (payload.id) {
-        const { data, error } = await supabase
-          .from("roles" as any)
-          .update({
-            name: payload.name,
-            description: payload.description || null,
-            permissions: payload.permissions as any,
-          })
-          .eq("id", payload.id)
-          .select()
-          .single();
-        if (error) throw error;
-        return data as unknown as RoleRow;
+        return (await api.roles.update(payload.id, body)) as RoleRow;
       }
-      const { data, error } = await supabase
-        .from("roles" as any)
-        .insert({
-          name: payload.name,
-          description: payload.description || null,
-          permissions: payload.permissions as any,
-        })
-        .select()
-        .single();
-      if (error) throw error;
-      return data as unknown as RoleRow;
+      return (await api.roles.create(body)) as RoleRow;
     },
     onSuccess: (saved, vars) => {
       queryClient.setQueryData<RoleRow[]>(["roles-permissions"], (old) => {
@@ -140,8 +120,7 @@ export function RolesPermissionsTab() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("roles" as any).delete().eq("id", id);
-      if (error) throw error;
+      await api.roles.remove(id);
       return id;
     },
     onMutate: async (id) => {

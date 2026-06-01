@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useRef, useState } from "react";
+import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -53,7 +53,7 @@ function initials(name: string) {
 }
 
 export function TicketChatThread({ ticketId, ticketStatus, raisedBy, assignedTo }: TicketChatThreadProps) {
-  const { user, profile, role } = useAuth();
+  const { user, role } = useAuth();
   const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -71,76 +71,16 @@ export function TicketChatThread({ ticketId, ticketStatus, raisedBy, assignedTo 
     role === "hod"
   );
 
-  // Initial fetch
-  const { data: initial } = useQuery({
+  // Fetch messages, polling every 4s (realtime deferred in the MongoDB migration).
+  const { data: initial, refetch } = useQuery({
     queryKey: ["ticket-messages", ticketId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("ticket_messages")
-        .select("*")
-        .eq("ticket_id", ticketId)
-        .order("created_at", { ascending: true });
-      if (error) throw error;
-      return (data as ChatMessage[]) || [];
-    },
+    queryFn: async () => (await api.tickets.messages(ticketId)) as ChatMessage[],
+    refetchInterval: 4000,
   });
 
   useEffect(() => {
     if (initial) setMessages(initial);
   }, [initial]);
-
-  // Realtime subscription — handle row events directly; never refetch the full list here.
-  useEffect(() => {
-    const channel = supabase
-      .channel(`ticket-${ticketId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "ticket_messages",
-          filter: `ticket_id=eq.${ticketId}`,
-        },
-        (payload) => {
-          const newMessage = payload.new as ChatMessage;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === newMessage.id)) return prev;
-            return [...prev, newMessage];
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "ticket_messages",
-          filter: `ticket_id=eq.${ticketId}`,
-        },
-        (payload) => {
-          const updatedMessage = payload.new as ChatMessage;
-          setMessages((prev) => prev.map((m) => (m.id === updatedMessage.id ? updatedMessage : m)));
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "ticket_messages",
-          filter: `ticket_id=eq.${ticketId}`,
-        },
-        (payload) => {
-          const deletedMessage = payload.old as Pick<ChatMessage, "id">;
-          setMessages((prev) => prev.filter((m) => m.id !== deletedMessage.id));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [ticketId]);
 
   // Auto-scroll
   useEffect(() => {
@@ -179,29 +119,21 @@ export function TicketChatThread({ ticketId, ticketStatus, raisedBy, assignedTo 
       // Upload attachments
       const uploaded: { url: string; name: string; type: string }[] = [];
       for (const f of files) {
-        const ext = f.name.split(".").pop();
-        const path = `${user.id}/chat/${ticketId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-        const { data, error } = await supabase.storage.from("ticket-attachments").upload(path, f);
-        if (error) {
+        try {
+          const { url } = await api.uploadFile(f);
+          uploaded.push({ url, name: f.name, type: f.type });
+        } catch {
           toast({ title: "Upload failed", description: f.name, variant: "destructive" });
-          continue;
         }
-        const { data: pub } = supabase.storage.from("ticket-attachments").getPublicUrl(data.path);
-        uploaded.push({ url: pub.publicUrl, name: f.name, type: f.type });
       }
 
-      const { error: insertError } = await supabase.from("ticket_messages").insert({
-        ticket_id: ticketId,
-        sender_id: user.id,
-        sender_name: profile?.name || "User",
-        sender_role: role || "user",
+      await api.tickets.sendMessage(ticketId, {
         message: input.trim() || null,
         attachments: uploaded,
-        is_system_message: false,
       });
-      if (insertError) throw insertError;
       setInput("");
       setFiles([]);
+      refetch();
     } catch (err: any) {
       toast({ title: "Failed to send", description: err.message, variant: "destructive" });
     } finally {

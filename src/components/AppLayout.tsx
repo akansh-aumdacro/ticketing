@@ -3,9 +3,9 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { Bell, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
@@ -24,44 +24,20 @@ export function AppLayout({ children, title }: AppLayoutProps) {
 
   const { data: notifications } = useQuery({
     queryKey: ["notifications", user?.id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("notifications")
-        .select("*")
-        .eq("user_id", user!.id)
-        .order("created_at", { ascending: false })
-        .limit(10);
-      return data || [];
-    },
+    queryFn: async () => api.notifications.list(10),
     enabled: !!user,
+    refetchInterval: 15000, // poll (realtime deferred in the MongoDB migration)
   });
 
   const markRead = useMutation({
-    mutationFn: async (id: string) => {
-      await supabase.from("notifications").update({ is_read: true }).eq("id", id);
-    },
+    mutationFn: async (id: string) => { await api.notifications.markRead(id); },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
   const markAllRead = useMutation({
-    mutationFn: async () => {
-      if (!user) return;
-      await supabase.from("notifications").update({ is_read: true }).eq("user_id", user.id).eq("is_read", false);
-    },
+    mutationFn: async () => { await api.notifications.markAllRead(); },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
   });
-
-  // Realtime updates for notifications
-  useEffect(() => {
-    if (!user) return;
-    const channel = supabase
-      .channel(`notif-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ["notifications"] });
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [user, queryClient]);
 
   const unreadCount = notifications?.filter(n => !n.is_read).length || 0;
 

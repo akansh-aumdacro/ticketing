@@ -20,7 +20,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -62,53 +62,30 @@ export default function PCReview() {
 
   const { data: units } = useQuery({
     queryKey: ["pc-review-units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("id,name").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
   });
 
   const { data: departments } = useQuery({
     queryKey: ["pc-review-departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("id,name").eq("is_active", true).order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list({ active: true }),
   });
 
   // Overdue tickets: target_date < today AND status not resolved/closed
-  const todayStr = new Date().toISOString().slice(0, 10);
   const { data: overdueRaw, isLoading: overdueLoading } = useQuery({
-    queryKey: ["pc-review-overdue", todayStr],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(id,name), unit:units!tickets_unit_id_fkey(id,name), assignee:profiles!tickets_assigned_to_fkey(name)")
-        .lt("target_date", todayStr)
-        .not("status", "in", "(resolved,closed)")
-        .order("target_date", { ascending: true });
-      return data || [];
-    },
+    queryKey: ["pc-review-overdue"],
+    queryFn: async () => api.tickets.list({ overdue: true }),
   });
 
   // Pending feedback: status resolved/closed AND no rating
   const { data: pendingRaw, isLoading: pendingLoading } = useQuery({
     queryKey: ["pc-review-pending"],
     queryFn: async () => {
-      const { data: tickets } = await supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(id,name), unit:units!tickets_unit_id_fkey(id,name), assignee:profiles!tickets_assigned_to_fkey(name), closer:profiles!tickets_closed_by_fkey(name)")
-        .in("status", ["resolved", "closed"])
-        .order("closed_at", { ascending: false });
-      if (!tickets) return [];
-      const ids = tickets.map((t: any) => t.id);
-      if (ids.length === 0) return [];
-      const { data: ratings } = await supabase
-        .from("ticket_ratings")
-        .select("ticket_id")
-        .in("ticket_id", ids);
-      const rated = new Set((ratings || []).map((r: any) => r.ticket_id));
-      return tickets.filter((t: any) => !rated.has(t.id));
+      const [tickets, ratings] = await Promise.all([
+        api.tickets.list({ status: "resolved,closed" }),
+        api.ratings.list(),
+      ]);
+      const rated = new Set((ratings as any[]).map((r) => r.ticket_id));
+      return (tickets as any[]).filter((t) => !rated.has(t.id));
     },
   });
 
@@ -116,13 +93,8 @@ export default function PCReview() {
   const { data: unassignedRaw, isLoading: unassignedLoading } = useQuery({
     queryKey: ["pc-review-unassigned"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(id,name), unit:units!tickets_unit_id_fkey(id,name), assignee:profiles!tickets_assigned_to_fkey(name), raiser:profiles!tickets_raised_by_fkey(name)")
-        .not("status", "in", "(resolved,closed)")
-        .or("assigned_to.is.null,target_date.is.null")
-        .order("created_at", { ascending: false });
-      return data || [];
+      const tickets = await api.tickets.list({ not_status: "resolved,closed" });
+      return (tickets as any[]).filter((t) => !t.assigned_to || !t.target_date);
     },
   });
 
@@ -197,7 +169,7 @@ export default function PCReview() {
 
   const handleSendReminder = async (ticket: any) => {
     try {
-      await supabase.from("notifications").insert({
+      await api.notifications.create({
         user_id: ticket.raised_by,
         title: "Feedback Reminder",
         message: `Please share feedback for ticket ${ticket.ticket_number}`,

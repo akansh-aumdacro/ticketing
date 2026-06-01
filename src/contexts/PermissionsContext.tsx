@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 
 export type AppRole = "super_admin" | "admin" | "hod" | "user" | "assigned_person";
@@ -80,15 +80,16 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("roles" as any)
-        .select("permissions")
-        .eq("name", role)
-        .maybeSingle();
-      if (cancelled) return;
-      const perms = (data as any)?.permissions as Permissions | undefined;
-      setPermissions(perms ?? EMPTY_PERMISSIONS);
-      setLoading(false);
+      try {
+        const data = await api.roles.getByName(role);
+        if (cancelled) return;
+        const perms = (data as any)?.permissions as Permissions | undefined;
+        setPermissions(perms ?? EMPTY_PERMISSIONS);
+      } catch {
+        if (!cancelled) setPermissions(EMPTY_PERMISSIONS);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [role, authLoading, isSuperAdmin]);

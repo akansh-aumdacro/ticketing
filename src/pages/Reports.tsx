@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowDown, ArrowUp, ArrowUpDown, CalendarIcon, ChevronDown, Download, Search } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { format, subDays, differenceInCalendarDays } from "date-fns";
@@ -133,58 +133,38 @@ export default function Reports() {
 
   const { data: units = [] } = useQuery({
     queryKey: ["summary-units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("id, name").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
     enabled: !!user,
   });
 
   const { data: departments = [] } = useQuery({
     queryKey: ["summary-departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("id, name").eq("is_active", true).order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list({ active: true }),
     enabled: !!user,
   });
 
   const selectedUnitNames = unitFilter ?? units.map(u => u.name);
 
-  const { data: tickets, isLoading, error, refetch } = useQuery({
-    queryKey: ["summary-tickets", selectedUnitNames.join(","), deptFilter, dateRange.from?.toISOString(), dateRange.to?.toISOString()],
-    queryFn: async () => {
-      const fromISO = dateRange.from.toISOString();
-      const toISO = new Date(dateRange.to.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
-      let q = supabase
-        .from("tickets")
-        .select(`
-          id, ticket_number, title, status, created_at, closed_at, raised_by, assigned_to,
-          unit:units!tickets_unit_id_fkey(name),
-          dept:departments!tickets_issue_department_id_fkey(name),
-          raiser:profiles!tickets_raised_by_fkey(name),
-          assignee:profiles!tickets_assigned_to_fkey(name),
-          closer:profiles!tickets_closed_by_fkey(name),
-          rating:ticket_ratings(rating, feedback)
-        `)
-        .gte("created_at", fromISO)
-        .lte("created_at", toISO)
-        .order("created_at", { ascending: false });
-
-      if (selectedUnitNames.length > 0 && selectedUnitNames.length < units.length) {
-        const unitIds = units.filter(u => selectedUnitNames.includes(u.name)).map(u => u.id);
-        if (unitIds.length) q = q.in("unit_id", unitIds);
-      }
-      if (deptFilter !== "all") {
-        const dept = departments.find(d => d.name === deptFilter);
-        if (dept) q = q.eq("issue_department_id", dept.id);
-      }
-      const { data, error } = await q;
-      if (error) throw error;
-      return data || [];
-    },
+  const { data: allTickets, isLoading, error, refetch } = useQuery({
+    queryKey: ["summary-tickets"],
+    queryFn: async () => api.tickets.list({}),
     enabled: !!user && units.length > 0,
   });
+
+  // Apply unit / department / date-range filters client-side.
+  const tickets = useMemo(() => {
+    const fromMs = dateRange.from.getTime();
+    const toMs = dateRange.to.getTime() + 24 * 60 * 60 * 1000 - 1;
+    return (allTickets || []).filter((t: any) => {
+      const created = new Date(t.created_at).getTime();
+      if (created < fromMs || created > toMs) return false;
+      if (selectedUnitNames.length > 0 && selectedUnitNames.length < units.length) {
+        if (!selectedUnitNames.includes(t.unit?.name)) return false;
+      }
+      if (deptFilter !== "all" && t.issue_dept?.name !== deptFilter) return false;
+      return true;
+    });
+  }, [allTickets, selectedUnitNames, units.length, deptFilter, dateRange]);
 
   // ---- Split + map ----
   const today = new Date();
@@ -195,7 +175,7 @@ export default function Reports() {
         id: t.id,
         ticket_number: t.ticket_number,
         unit: t.unit?.name || "—",
-        department: t.dept?.name || "—",
+        department: t.issue_dept?.name || "—",
         issue_date: t.created_at,
         issue_date_label: format(new Date(t.created_at), "MMM d"),
         issues: t.title || "",
@@ -215,7 +195,7 @@ export default function Reports() {
           id: t.id,
           ticket_number: t.ticket_number,
           unit: t.unit?.name || "—",
-          department: t.dept?.name || "—",
+          department: t.issue_dept?.name || "—",
           resolved_date: resolvedAt,
           resolved_date_label: format(new Date(resolvedAt), "MMM d, yyyy"),
           aging: differenceInCalendarDays(new Date(resolvedAt), new Date(t.created_at)),

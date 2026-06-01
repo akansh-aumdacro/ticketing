@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { Inbox, CalendarIcon } from "lucide-react";
@@ -78,32 +78,28 @@ export default function Dashboard() {
 
   const { data: units } = useQuery({
     queryKey: ["filter-units"],
-    queryFn: async () => (await supabase.from("units").select("id, name").order("name")).data || [],
+    queryFn: async () => api.units.list(),
   });
   const { data: departments } = useQuery({
     queryKey: ["filter-departments"],
-    queryFn: async () => (await supabase.from("departments").select("id, name").eq("is_active", true).order("name")).data || [],
+    queryFn: async () => api.departments.list({ active: true }),
   });
 
   const { data: tickets, isLoading } = useQuery({
     queryKey: ["overview-tickets", role, profile?.department_id],
     queryFn: async () => {
-      let query = supabase
-        .from("tickets")
-        .select("id, status, created_at, closed_at, issue_department_id, unit_id")
-        .order("created_at", { ascending: false });
-      if (role === "user") query = query.eq("raised_by", user!.id);
-      else if (role === "hod" && profile?.department_id) query = query.eq("issue_department_id", profile.department_id);
-      else if (role === "assigned_person") query = query.eq("assigned_to", user!.id);
-      const { data } = await query;
-      return data || [];
+      const params: Record<string, string | boolean> = {};
+      if (role === "user") params.mine = true;
+      else if (role === "hod" && profile?.department_id) params.department = profile.department_id;
+      else if (role === "assigned_person") params.assigned = true;
+      return api.tickets.list(params);
     },
     enabled: !!user,
   });
 
   const { data: ratings, isLoading: ratingsLoading } = useQuery({
     queryKey: ["overview-ratings"],
-    queryFn: async () => (await supabase.from("ticket_ratings").select("rating, created_at, ticket_id")).data || [],
+    queryFn: async () => api.ratings.list(),
     enabled: !!user,
   });
 

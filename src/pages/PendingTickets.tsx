@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/popover";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { statusMap } from "@/lib/mock-data";
 import { Search, Clock, UserPlus, Trash2 } from "lucide-react";
@@ -36,65 +36,41 @@ export default function PendingTickets() {
   const { data: tickets, isLoading } = useQuery({
     queryKey: ["pending-tickets", user?.id, role, profile?.department_id],
     queryFn: async () => {
-      let query = supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(name), raiser:profiles!tickets_raised_by_fkey(name)")
-        .in("status", ["open", "reopened"])
-        .order("created_at", { ascending: false });
-
+      const params: Record<string, string | boolean> = { status: "open,reopened" };
       if (role === "user") {
-        query = query.eq("raised_by", user!.id);
+        params.mine = true;
       } else if ((role === "assigned_person" || isHOD) && profile?.department_id) {
-        query = query.eq("issue_department_id", profile.department_id);
+        params.department = profile.department_id;
       }
       // admin/super_admin see all
-
-      const { data } = await query;
-      return data || [];
+      return api.tickets.list(params);
     },
     enabled: !!user,
   });
 
-  // Fetch team members for HOD assign
+  // Fetch team members (assigned_person) in the HOD's department for assignment.
   const { data: teamMembers } = useQuery({
     queryKey: ["team-members", profile?.department_id],
     queryFn: async () => {
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("user_id, name")
-        .eq("department_id", profile!.department_id!);
-
-      // Filter to only assigned_person roles
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("user_id, role")
-        .in("role", ["assigned_person"]);
-
-      const roleMap = new Map(roles?.map(r => [r.user_id, r.role]) || []);
-      return (profiles || []).filter(p => roleMap.has(p.user_id) && p.user_id !== user!.id);
+      const profiles = await api.profiles.list({ department_id: profile!.department_id!, role: "assigned_person" });
+      return (profiles as any[]).filter((p) => p.user_id !== user!.id);
     },
     enabled: isHOD && !!profile?.department_id,
   });
 
   const assignMutation = useMutation({
     mutationFn: async ({ ticketId, assigneeId }: { ticketId: string; assigneeId: string }) => {
-      const { error } = await supabase
-        .from("tickets")
-        .update({ assigned_to: assigneeId, status: "in_progress", assigned_at: new Date().toISOString() })
-        .eq("id", ticketId);
-      if (error) throw error;
+      await api.tickets.update(ticketId, { assigned_to: assigneeId, status: "in_progress" });
 
       // Add history
-      await supabase.from("ticket_history").insert({
-        ticket_id: ticketId,
-        performed_by: user!.id,
+      await api.tickets.addHistory(ticketId, {
         action: "Assigned ticket",
         old_status: "open",
         new_status: "in_progress",
       });
 
       // Notification
-      await supabase.from("notifications").insert({
+      await api.notifications.create({
         user_id: assigneeId,
         title: "Ticket Assigned",
         message: "A ticket has been assigned to you.",

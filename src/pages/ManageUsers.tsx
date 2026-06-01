@@ -21,12 +21,11 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Search, Shield, PlusCircle, Pencil, Trash2, Eye, EyeOff, Loader2, FileUp } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import type { Database } from "@/integrations/supabase/types";
 import { BulkImportUsersDialog } from "@/components/BulkImportUsersDialog";
 
-type AppRole = Database["public"]["Enums"]["app_role"];
+type AppRole = "super_admin" | "admin" | "hod" | "user" | "assigned_person";
 
 const baseRoleLabels: Record<string, string> = {
   super_admin: "Super Admin",
@@ -76,44 +75,25 @@ export default function ManageUsers() {
   const [showPassword, setShowPassword] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
 
+  // Combined user list (profile + email + role) from the admin endpoint.
   const { data: profiles, isLoading } = useQuery({
     queryKey: ["all-profiles"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("profiles").select("*").order("name");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: async () => api.users.list(),
     refetchOnWindowFocus: false,
     refetchInterval: false,
   });
-
-  const { data: userRoles, isLoading: rolesLoading } = useQuery({
-    queryKey: ["all-user-roles"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("user_roles").select("*");
-      if (error) throw error;
-      return data;
-    },
-    refetchOnWindowFocus: false,
-    refetchInterval: false,
-  });
+  const rolesLoading = false;
 
   const { data: departments } = useQuery({
     queryKey: ["departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("*").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list(),
     refetchOnWindowFocus: false,
     refetchInterval: false,
   });
 
   const { data: units } = useQuery({
     queryKey: ["units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("*").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
     refetchOnWindowFocus: false,
     refetchInterval: false,
   });
@@ -121,8 +101,8 @@ export default function ManageUsers() {
   const { data: rolesList } = useQuery({
     queryKey: ["roles-list"],
     queryFn: async () => {
-      const { data } = await (supabase.from("roles" as any).select("name").order("created_at") as any);
-      return ((data ?? []) as Array<{ name: string }>).map((r) => r.name);
+      const roles = await api.roles.list();
+      return (roles as Array<{ name: string }>).map((r) => r.name);
     },
     refetchOnWindowFocus: false,
   });
@@ -135,13 +115,11 @@ export default function ManageUsers() {
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["all-profiles"] });
-    queryClient.invalidateQueries({ queryKey: ["all-user-roles"] });
   };
 
   const updateRole = useMutation({
     mutationFn: async ({ userId, newRole }: { userId: string; newRole: AppRole }) => {
-      const { error } = await supabase.from("user_roles").update({ role: newRole }).eq("user_id", userId);
-      if (error) throw error;
+      await api.users.updateRole(userId, newRole);
     },
     onSuccess: () => { invalidateAll(); toast({ title: "Role Updated" }); },
     onError: (err: Error) => { toast({ title: "Error", description: err.message, variant: "destructive" }); },
@@ -149,22 +127,20 @@ export default function ManageUsers() {
 
   const updateDepartment = useMutation({
     mutationFn: async ({ userId, departmentId }: { userId: string; departmentId: string | null }) => {
-      const { error } = await supabase.from("profiles").update({ department_id: departmentId }).eq("user_id", userId);
-      if (error) throw error;
+      await api.users.updateProfile(userId, { department_id: departmentId });
     },
     onSuccess: () => { invalidateAll(); toast({ title: "Department Updated" }); },
     onError: (err: Error) => { toast({ title: "Error", description: err.message, variant: "destructive" }); },
   });
 
   const getRoleForUser = (userId: string): AppRole => {
-    const found = userRoles?.find((r) => r.user_id === userId);
+    const found = profiles?.find((p) => p.user_id === userId);
     return (found?.role as AppRole) || "user";
   };
 
   const filtered = profiles?.filter((p) => {
-    // Soft-deleted/deactivated users keep their profile for audit history but lose all roles.
-    // Hide them from User Management so they do not reappear after cache refresh/page reload.
-    if (userRoles && !userRoles.some((r) => r.user_id === p.user_id)) return false;
+    // Deactivated (soft-deleted) users keep their profile for audit history; hide them here.
+    if (p.is_active === false) return false;
 
     const term = search.toLowerCase();
     return (
@@ -185,27 +161,17 @@ export default function ManageUsers() {
     }
     setFormLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-create-user`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({
-          email: form.email,
-          password: form.password,
-          name: form.name,
-          username: form.username,
-          employeeId: form.employeeId,
-          contact: form.contact,
-          role: form.role,
-          departmentId: form.departmentId,
-          unitId: form.unitId,
-        }),
+      await api.users.create({
+        email: form.email,
+        password: form.password,
+        name: form.name,
+        username: form.username,
+        employeeId: form.employeeId,
+        contact: form.contact,
+        role: form.role,
+        departmentId: form.departmentId,
+        unitId: form.unitId,
       });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || "Failed to create user");
       toast({ title: "User Created", description: `${form.name} has been added successfully.` });
       setAddOpen(false);
       setForm(emptyForm);
@@ -224,73 +190,35 @@ export default function ManageUsers() {
     }
     setFormLoading(true);
     try {
-      // Update profile — select() forces the response so RLS rejections surface as errors
-      const { data: profileData, error: profileError } = await supabase
-        .from("profiles")
-        .update({
-          name: form.name,
-          username: form.username || null,
-          employee_id: form.employeeId || null,
-          contact: form.contact || null,
-          department_id: form.departmentId === "none" ? null : form.departmentId,
-          unit_id: form.unitId || null,
-        })
-        .eq("user_id", selectedUser.user_id)
-        .select();
-
-      if (profileError) throw profileError;
-      if (!profileData || profileData.length === 0) {
-        throw new Error("Profile update was rejected (no rows updated). Check your permissions.");
-      }
-
-      // Replace role (no unique constraint on user_id, so delete-then-insert)
-      const currentRole = getRoleForUser(selectedUser.user_id);
-      if (form.role !== currentRole) {
-        const { error: deleteRoleError } = await supabase
-          .from("user_roles")
-          .delete()
-          .eq("user_id", selectedUser.user_id);
-        if (deleteRoleError) throw deleteRoleError;
-
-        const { data: roleData, error: roleError } = await supabase
-          .from("user_roles")
-          .insert({ user_id: selectedUser.user_id, role: form.role })
-          .select();
-        if (roleError) throw roleError;
-        if (!roleData || roleData.length === 0) {
-          throw new Error("Role update was rejected. Only Admins/Super Admins can change roles.");
-        }
-      }
-
-      // Update cache directly with confirmed DB values — no refetch (would race & revert).
-      queryClient.setQueryData(["all-profiles"], (old: any[] | undefined) =>
-        old?.map((p) => (p.user_id === selectedUser.user_id ? { ...p, ...profileData[0] } : p))
-      );
-      queryClient.setQueryData(["all-user-roles"], (old: any[] | undefined) => {
-        if (!old) return old;
-        const exists = old.some((r) => r.user_id === selectedUser.user_id);
-        return exists
-          ? old.map((r) => (r.user_id === selectedUser.user_id ? { ...r, role: form.role } : r))
-          : [...old, { user_id: selectedUser.user_id, role: form.role, id: crypto.randomUUID() }];
+      // Update profile fields
+      const updatedProfile = await api.users.updateProfile(selectedUser.user_id, {
+        name: form.name,
+        username: form.username || null,
+        employee_id: form.employeeId || null,
+        contact: form.contact || null,
+        department_id: form.departmentId === "none" ? null : form.departmentId,
+        unit_id: form.unitId || null,
       });
 
-      // Update email/password via edge function if provided
+      // Update role if changed
+      const currentRole = getRoleForUser(selectedUser.user_id);
+      if (form.role !== currentRole) {
+        await api.users.updateRole(selectedUser.user_id, form.role);
+      }
+
+      // Update cache directly with confirmed values — no refetch (would race & revert).
+      queryClient.setQueryData(["all-profiles"], (old: any[] | undefined) =>
+        old?.map((p) =>
+          p.user_id === selectedUser.user_id ? { ...p, ...updatedProfile, role: form.role } : p
+        )
+      );
+
+      // Update email/password if provided
       if ((form.email && form.email.trim()) || (form.password && form.password.length > 0)) {
-        const { data: { session } } = await supabase.auth.getSession();
-        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-update-user-credentials`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify({
-            userId: selectedUser.user_id,
-            email: form.email?.trim() || undefined,
-            password: form.password || undefined,
-          }),
+        await api.users.updateCredentials(selectedUser.user_id, {
+          email: form.email?.trim() || undefined,
+          password: form.password || undefined,
         });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.error || "Failed to update credentials");
       }
 
       toast({ title: "User updated", description: `${form.name}'s details have been saved.` });
@@ -309,28 +237,14 @@ export default function ManageUsers() {
 
     // Snapshot for rollback if the server rejects
     const prevProfiles = queryClient.getQueryData<any[]>(["all-profiles"]);
-    const prevRoles = queryClient.getQueryData<any[]>(["all-user-roles"]);
 
     // Optimistically remove from cache immediately
     queryClient.setQueryData(["all-profiles"], (old: any[] | undefined) =>
       old?.filter((p) => p.user_id !== selectedUser.user_id)
     );
-    queryClient.setQueryData(["all-user-roles"], (old: any[] | undefined) =>
-      old?.filter((r) => r.user_id !== selectedUser.user_id)
-    );
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-delete-user`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ userId: selectedUser.user_id }),
-      });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || "Failed to delete user");
+      const result: any = await api.users.remove(selectedUser.user_id);
 
       // DO NOT invalidate here — soft-deleted users still exist in `profiles` and would
       // reappear in the list. The optimistic removal above is the source of truth.
@@ -345,7 +259,6 @@ export default function ManageUsers() {
     } catch (err: any) {
       // Roll back optimistic removal so the row reappears
       queryClient.setQueryData(["all-profiles"], prevProfiles);
-      queryClient.setQueryData(["all-user-roles"], prevRoles);
       toast({ title: "Delete failed", description: err?.message || "Unknown error", variant: "destructive" });
     } finally {
       setFormLoading(false);

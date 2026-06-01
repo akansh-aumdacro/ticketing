@@ -12,7 +12,7 @@ import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { AttachmentDropzone, AttachmentItem } from "@/components/AttachmentDropzone";
 
@@ -30,10 +30,7 @@ export default function CreateTicket() {
 
   const { data: units } = useQuery({
     queryKey: ["units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("*").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
   });
 
   // Auto-fill unit from user's profile (user can still change it)
@@ -45,10 +42,7 @@ export default function CreateTicket() {
 
   const { data: departments } = useQuery({
     queryKey: ["departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("*").eq("is_active", true).order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list({ active: true }),
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -56,70 +50,49 @@ export default function CreateTicket() {
     if (!user) return;
     setIsSubmitting(true);
 
-    // 1. Create the ticket first to get its ID
-    const { data: created, error: insertError } = await supabase
-      .from("tickets")
-      .insert({
+    try {
+      // 1. Upload attachments in parallel, tracking per-file status
+      const uploadedUrls: string[] = [];
+      let firstImageUrl: string | null = null;
+      if (attachments.length > 0) {
+        const working = [...attachments];
+        working.forEach((it, i) => { working[i] = { ...it, status: "uploading" }; });
+        setAttachments([...working]);
+
+        await Promise.all(
+          working.map(async (item, idx) => {
+            try {
+              const { url } = await api.uploadFile(item.file);
+              uploadedUrls.push(url);
+              if (!firstImageUrl && item.file.type.startsWith("image/")) firstImageUrl = url;
+              working[idx] = { ...working[idx], status: "success", url };
+            } catch (err: any) {
+              working[idx] = { ...working[idx], status: "error", error: err?.message || "Upload failed" };
+            }
+            setAttachments([...working]);
+          })
+        );
+      }
+
+      // 2. Create the ticket (server assigns the ticket number + SLA)
+      await api.tickets.create({
         title,
         description,
         unit_id: unitId || null,
         department_id: profile?.department_id || null,
         issue_department_id: issueDeptId || null,
-        raised_by: user.id,
-        priority: priority as any,
-        ticket_number: "TEMP",
-      })
-      .select("id")
-      .single();
+        priority,
+        attachments: uploadedUrls,
+        photo_url: firstImageUrl,
+      });
 
-    if (insertError || !created) {
+      toast({ title: "Ticket Created", description: "Your ticket has been submitted successfully." });
+      navigate("/my-tickets");
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.message || "Failed to create ticket", variant: "destructive" });
+    } finally {
       setIsSubmitting(false);
-      toast({ title: "Error", description: insertError?.message || "Failed to create ticket", variant: "destructive" });
-      return;
     }
-
-    const ticketId = created.id;
-
-    // 2. Upload attachments in parallel, tracking per-file status
-    if (attachments.length > 0) {
-      const working = [...attachments];
-      working.forEach((it, i) => { working[i] = { ...it, status: "uploading" }; });
-      setAttachments([...working]);
-
-      const uploadedUrls: string[] = [];
-      await Promise.all(
-        working.map(async (item, idx) => {
-          try {
-            const ext = item.file.name.split(".").pop();
-            const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-            const path = `${user.id}/${ticketId}/${Date.now()}-${idx}-${safeName}`;
-            const { data: uploadData, error: upErr } = await supabase.storage
-              .from("ticket-attachments")
-              .upload(path, item.file, { contentType: item.file.type });
-            if (upErr || !uploadData) throw upErr || new Error("Upload failed");
-            const { data: urlData } = supabase.storage
-              .from("ticket-attachments")
-              .getPublicUrl(uploadData.path);
-            uploadedUrls.push(urlData.publicUrl);
-            working[idx] = { ...working[idx], status: "success", url: urlData.publicUrl };
-          } catch (err: any) {
-            working[idx] = { ...working[idx], status: "error", error: err?.message || "Upload failed" };
-          }
-          setAttachments([...working]);
-        })
-      );
-
-      // 3. Save URLs onto the ticket (keep first image as photo_url for back-compat)
-      const firstImageUrl = working.find(w => w.status === "success" && w.file.type.startsWith("image/"))?.url || null;
-      await supabase
-        .from("tickets")
-        .update({ attachments: uploadedUrls as any, photo_url: firstImageUrl })
-        .eq("id", ticketId);
-    }
-
-    setIsSubmitting(false);
-    toast({ title: "Ticket Created", description: "Your ticket has been submitted successfully." });
-    navigate("/my-tickets");
   };
 
   return (

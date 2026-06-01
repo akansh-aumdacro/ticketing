@@ -13,7 +13,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { statusMap } from "@/lib/mock-data";
 import { Search, Building2, UserPlus, Trash2 } from "lucide-react";
@@ -44,29 +44,20 @@ export default function DepartmentTickets() {
 
   const { data: departments } = useQuery({
     queryKey: ["departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("*").eq("is_active", true).order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list({ active: true }),
   });
 
   const { data: tickets, isLoading } = useQuery({
     queryKey: ["dept-tickets", isSuperOrAdmin, profile?.department_id, role],
     queryFn: async () => {
-      let query = supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(name), raiser:profiles!tickets_raised_by_fkey(name), assignee:profiles!tickets_assigned_to_fkey(name)")
-        .order("created_at", { ascending: false });
-
+      const params: Record<string, string | boolean> = {};
       if (!isSuperOrAdmin && profile?.department_id) {
-        query = query.eq("issue_department_id", profile.department_id);
+        params.department = profile.department_id;
       }
       if (role === "user") {
-        query = query.eq("raised_by", user!.id);
+        params.mine = true;
       }
-
-      const { data } = await query;
-      return data || [];
+      return api.tickets.list(params);
     },
     enabled: !!user,
   });
@@ -74,31 +65,19 @@ export default function DepartmentTickets() {
   // Team members for HOD assign
   const { data: teamMembers } = useQuery({
     queryKey: ["team-members-dept", profile?.department_id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("profiles")
-        .select("user_id, name")
-        .eq("department_id", profile!.department_id!);
-      return data || [];
-    },
+    queryFn: async () => api.profiles.list({ department_id: profile!.department_id! }),
     enabled: isHOD && !!profile?.department_id,
   });
 
   const assignMutation = useMutation({
     mutationFn: async ({ ticketId, assigneeId }: { ticketId: string; assigneeId: string }) => {
-      const { error } = await supabase
-        .from("tickets")
-        .update({ assigned_to: assigneeId, status: "in_progress", assigned_at: new Date().toISOString() })
-        .eq("id", ticketId);
-      if (error) throw error;
-      await supabase.from("ticket_history").insert({
-        ticket_id: ticketId,
-        performed_by: user!.id,
+      await api.tickets.update(ticketId, { assigned_to: assigneeId, status: "in_progress" });
+      await api.tickets.addHistory(ticketId, {
         action: "Assigned ticket",
         old_status: "open",
         new_status: "in_progress",
       });
-      await supabase.from("notifications").insert({
+      await api.notifications.create({
         user_id: assigneeId,
         title: "Ticket Assigned",
         message: "A ticket has been assigned to you.",

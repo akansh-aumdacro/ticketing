@@ -22,10 +22,9 @@ import {
 } from "@/components/ui/select";
 import { Building2, PlusCircle, Pencil, Trash2, Save, Factory, Check, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { RolesPermissionsTab } from "@/components/settings/RolesPermissionsTab";
-import { GoogleSheetsSync } from "@/components/settings/GoogleSheetsSync";
 
 
 export default function Settings() {
@@ -72,30 +71,20 @@ export default function Settings() {
 
   const { data: departments, isLoading: deptsLoading } = useQuery({
     queryKey: ["departments"],
-    queryFn: async () => {
-      const { data } = await supabase.from("departments").select("*").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.departments.list(),
     refetchOnWindowFocus: false,
     refetchInterval: false,
   });
 
   const { data: units, isLoading: unitsLoading } = useQuery({
     queryKey: ["units"],
-    queryFn: async () => {
-      const { data } = await supabase.from("units").select("*").order("name");
-      return data || [];
-    },
+    queryFn: async () => api.units.list(),
     refetchOnWindowFocus: false,
     refetchInterval: false,
   });
 
   const addUnit = useMutation({
-    mutationFn: async (name: string) => {
-      const { data, error } = await supabase.from("units").insert({ name }).select().single();
-      if (error) throw error;
-      return data;
-    },
+    mutationFn: async (name: string) => api.units.create(name),
     onSuccess: (newUnit) => {
       queryClient.setQueryData<any[]>(["units"], (old) => [...(old ?? []), newUnit].sort((a, b) => a.name.localeCompare(b.name)));
       toast({ title: "Unit Added" });
@@ -107,8 +96,7 @@ export default function Settings() {
 
   const updateUnit = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
-      const { error } = await supabase.from("units").update({ name }).eq("id", id);
-      if (error) throw error;
+      await api.units.update(id, name);
       return { id, name };
     },
     onSuccess: ({ id, name }) => {
@@ -124,8 +112,7 @@ export default function Settings() {
 
   const deleteUnit = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("units").delete().eq("id", id);
-      if (error) throw error;
+      await api.units.remove(id);
       return id;
     },
     onMutate: async (id: string) => {
@@ -144,18 +131,14 @@ export default function Settings() {
   });
 
   const addDept = useMutation({
-    mutationFn: async (name: string) => {
-      const { error } = await supabase.from("departments").insert({ name });
-      if (error) throw error;
-    },
+    mutationFn: async (name: string) => { await api.departments.create({ name }); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["departments"] }); toast({ title: "Department Added" }); setDeptDialogOpen(false); setDeptName(""); },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const updateDept = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
-      const { error } = await supabase.from("departments").update({ name }).eq("id", id);
-      if (error) throw error;
+      await api.departments.update(id, { name });
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["departments"] }); toast({ title: "Department Updated" }); setDeptDialogOpen(false); setEditingDept(null); setDeptName(""); },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -163,8 +146,7 @@ export default function Settings() {
 
   const deleteDept = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("departments").delete().eq("id", id);
-      if (error) throw error;
+      await api.departments.remove(id);
       return id;
     },
     onMutate: async (id: string) => {
@@ -184,8 +166,7 @@ export default function Settings() {
 
   const toggleDeptActive = useMutation({
     mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
-      const { error } = await supabase.from("departments").update({ is_active } as any).eq("id", id);
-      if (error) throw error;
+      await api.departments.update(id, { is_active });
       return { id, is_active };
     },
     onMutate: async ({ id, is_active }) => {
@@ -471,20 +452,9 @@ export default function Settings() {
             </Card>
           </TabsContent>
 
-          {/* Roles & Permissions (with nested Sheets Sync sub-tab) */}
+          {/* Roles & Permissions */}
           <TabsContent value="roles">
-            <Tabs defaultValue="permissions" className="space-y-4">
-              <TabsList>
-                <TabsTrigger value="permissions">Permissions</TabsTrigger>
-                <TabsTrigger value="sheets">Sheets Sync</TabsTrigger>
-              </TabsList>
-              <TabsContent value="permissions">
-                <RolesPermissionsTab />
-              </TabsContent>
-              <TabsContent value="sheets">
-                <GoogleSheetsSync />
-              </TabsContent>
-            </Tabs>
+            <RolesPermissionsTab />
           </TabsContent>
         </Tabs>
       </div>

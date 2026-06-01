@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Camera, Eye, EyeOff, Loader2, Lock, Save } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 
@@ -58,17 +58,17 @@ export function MyProfileTab() {
       setEmployeeId(profile.employee_id || "");
       setContact(profile.contact || "");
       setDepartmentId(profile.department_id || "");
-      setAvatarUrl((profile as any).profile_picture || null);
+      setAvatarUrl(profile.avatar_url || null);
     }
   }, [profile]);
 
   const { data: departments } = useQuery({
     queryKey: ["all-departments-myprofile"],
-    queryFn: async () => (await supabase.from("departments").select("id,name,is_active")).data || [],
+    queryFn: async () => api.departments.list(),
   });
   const { data: units } = useQuery({
     queryKey: ["all-units-myprofile"],
-    queryFn: async () => (await supabase.from("units").select("id,name")).data || [],
+    queryFn: async () => api.units.list(),
   });
 
   const deptName = departments?.find((d) => d.id === profile?.department_id)?.name || "Not Assigned";
@@ -91,15 +91,9 @@ export function MyProfileTab() {
     }
     setUploading(true);
     try {
-      const ext = file.name.split(".").pop();
-      const path = `${user.id}/avatar-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("profile-pictures").upload(path, file, { contentType: file.type, upsert: true });
-      if (upErr) throw upErr;
-      const { data: urlData } = supabase.storage.from("profile-pictures").getPublicUrl(path);
-      const publicUrl = urlData.publicUrl;
-      const { error: updErr } = await supabase.from("profiles").update({ profile_picture: publicUrl } as any).eq("user_id", user.id);
-      if (updErr) throw updErr;
-      setAvatarUrl(publicUrl);
+      const { url } = await api.uploadFile(file);
+      await api.profiles.updateMe({ avatar_url: url });
+      setAvatarUrl(url);
       await refreshProfile();
       toast({ title: "Profile picture updated" });
     } catch (err: any) {
@@ -123,28 +117,23 @@ export function MyProfileTab() {
 
     setSaving(true);
     try {
-      if (wantsPasswordChange && user?.email) {
-        const { error: reauthErr } = await supabase.auth.signInWithPassword({ email: user.email, password: currentPassword });
-        if (reauthErr) {
-          setPasswordError("Current password is incorrect");
+      if (wantsPasswordChange) {
+        try {
+          await api.auth.changePassword(currentPassword, newPassword);
+        } catch (err: any) {
+          setPasswordError(err?.message || "Current password is incorrect");
           setSaving(false);
           return;
         }
-        const { error: pwErr } = await supabase.auth.updateUser({ password: newPassword });
-        if (pwErr) throw pwErr;
       }
 
-      const { error: profErr } = await supabase
-        .from("profiles")
-        .update({
-          name: name.trim(),
-          username: username.trim(),
-          employee_id: employeeId.trim() || null,
-          contact: contact.trim() || null,
-          department_id: departmentId || null,
-        })
-        .eq("user_id", user!.id);
-      if (profErr) throw profErr;
+      await api.profiles.updateMe({
+        name: name.trim(),
+        username: username.trim(),
+        employee_id: employeeId.trim() || null,
+        contact: contact.trim() || null,
+        department_id: departmentId || null,
+      });
 
       await refreshProfile();
       setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");

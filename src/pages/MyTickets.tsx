@@ -13,7 +13,7 @@ import { Plus, Filter, Eye, RefreshCw, Search, FileText, Trash2 } from "lucide-r
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useDeleteTicket } from "@/hooks/useDeleteTicket";
@@ -47,14 +47,7 @@ export default function MyTickets() {
 
   const { data: tickets, isLoading } = useQuery({
     queryKey: ["my-tickets", user?.id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("tickets")
-        .select("*, issue_dept:departments!tickets_issue_department_id_fkey(name), unit:units(name), assigned_profile:profiles!tickets_assigned_to_fkey(name)")
-        .eq("raised_by", user!.id)
-        .order("created_at", { ascending: false });
-      return data || [];
-    },
+    queryFn: async () => api.tickets.list({ mine: true }),
     enabled: !!user,
   });
 
