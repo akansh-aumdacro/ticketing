@@ -1,0 +1,4 @@
+project_id = "zagobelpjdvkabovcjjt"
+
+[functions.sync-tickets-to-sheets]
+verify_jwt = false

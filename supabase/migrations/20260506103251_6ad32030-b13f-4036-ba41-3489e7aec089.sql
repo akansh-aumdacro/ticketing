@@ -1,0 +1,1 @@
+ALTER TABLE public.roles ALTER COLUMN name TYPE text USING name::text;

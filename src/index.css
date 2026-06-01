@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    --background: 210 22% 96%;
+    --foreground: 215 28% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 28% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 28% 17%;
+    --primary: 221 83% 48%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 42 52% 54%;
+    --secondary-foreground: 215 28% 17%;
+    --muted: 210 20% 92%;
+    --muted-foreground: 217 10% 45%;
+    --accent: 210 20% 92%;
+    --accent-foreground: 215 28% 17%;
+    --destructive: 0 78% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    --ring: 221 83% 48%;
+    --radius: 0.5rem;
+
+    --sidebar-background: 210 47% 11%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 42 52% 54%;
+    --sidebar-primary-foreground: 210 47% 11%;
+    --sidebar-accent: 210 40% 18%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 210 35% 20%;
+    --sidebar-ring: 42 52% 54%;
+    --sidebar-muted-foreground: 210 15% 55%;
+
+    --status-open: 221 83% 53%;
+    --status-in-progress: 30 100% 50%;
+    --status-resolved: 153 80% 34%;
+    --status-closed: 215 14% 60%;
+    --status-reopened: 0 76% 52%;
+
+    --priority-critical: 0 84% 60%;
+    --priority-high: 25 95% 53%;
+    --priority-medium: 45 93% 47%;
+    --priority-low: 142 71% 45%;
+
+    --surface-elevated: 0 0% 100%;
+    --surface-sunken: 220 20% 95%;
+
+    --chart-1: 221 83% 48%;
+    --chart-2: 42 52% 54%;
+    --chart-3: 153 80% 34%;
+    --chart-4: 30 100% 50%;
+    --chart-5: 0 76% 52%;
+  }
+
+  .dark {
+    --background: 210 47% 7%;
+    --foreground: 210 20% 92%;
+    --card: 210 40% 12%;
+    --card-foreground: 210 20% 92%;
+    --popover: 210 40% 12%;
+    --popover-foreground: 210 20% 92%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 42 52% 54%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 210 35% 20%;
+    --muted-foreground: 210 15% 55%;
+    --accent: 210 35% 20%;
+    --accent-foreground: 210 20% 92%;
+    --destructive: 0 78% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 35% 20%;
+    --input: 210 35% 20%;
+    --ring: 221 83% 53%;
+
+    --sidebar-background: 210 47% 7%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 42 52% 54%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 40% 14%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 210 35% 18%;
+    --sidebar-ring: 42 52% 54%;
+    --sidebar-muted-foreground: 210 15% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Background dot pattern */
+.bg-grid-pattern {
+  background-image: radial-gradient(circle, hsl(var(--border)) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@layer components {
+  .status-badge-open {
+    @apply bg-blue-100 text-blue-700 border-blue-200;
+  }
+  .status-badge-in-progress {
+    @apply bg-orange-100 text-orange-700 border-orange-200;
+  }
+  .status-badge-resolved {
+    @apply bg-green-100 text-green-700 border-green-200;
+  }
+  .status-badge-closed {
+    @apply bg-gray-100 text-gray-500 border-gray-200;
+  }
+  .status-badge-reopened {
+    @apply bg-red-100 text-red-700 border-red-200;
+  }
+}
+
+/* Page transitions */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}

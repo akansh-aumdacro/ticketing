@@ -1,0 +1,1 @@
+ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
